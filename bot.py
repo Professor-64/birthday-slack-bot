@@ -105,7 +105,7 @@ if jarigen:
     # Bericht versturen
     if gif_url:
         client.chat_postMessage(
-            channel='#avo-testverjaardagen',
+            channel='#avo-random',
             text=bericht,
             blocks=[
                 {"type": "section", "text": {"type": "mrkdwn", "text": bericht}},
