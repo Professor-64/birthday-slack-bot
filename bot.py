@@ -100,7 +100,7 @@ if jarigen:
     gif_url = get_random_birthday_gif(giphy_api_key)
 
     # Bericht opstellen
-    bericht = wens_tekst
+    bericht = "🥳🎉 \n" + wens_tekst
 
     # Bericht versturen
     if gif_url:
