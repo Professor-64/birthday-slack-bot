@@ -7,112 +7,104 @@ from dotenv import load_dotenv
 
 def get_random_birthday_gif(api_key):
     url = "https://api.giphy.com/v1/gifs/search"
-    params = {
-        "api_key": api_key,
-        "q": "birthday",
-        "limit": 25,
-        "offset": random.randint(0, 50),
-        "rating": "pg-13",  # <-- met streepje
-        "lang": "en"
-    }
+    params = {"api_key": api_key, "q": "birthday", "limit": 25, "offset": random.randint(0, 50), "rating": "pg-13", "lang": "en"}
     r = requests.get(url, params=params)
     r.raise_for_status()
     data = r.json()
-    if data.get("data"):
-        return data["data"][0]["images"]["original"]["url"]
+    return data["data"][0]["images"]["original"]["url"] if data.get("data") else None
+
+def parse_dag_maand(datum_str):
+    datum_str = str(datum_str).strip()
+    if not datum_str:
+        return None
+    formaten = ["%d-%m-%Y", "%d/%m/%Y", "%d-%m", "%d/%m"]
+    for fmt in formaten:
+        try:
+            if fmt in ("%d-%m", "%d/%m"):
+                datum_str_jaar = f"{datum_str}-2000" if '-' in datum_str else f"{datum_str}/2000"
+                fmt += "-%Y"
+                d = datetime.strptime(datum_str_jaar, fmt)
+            else:
+                d = datetime.strptime(datum_str, fmt)
+            return (d.day, d.month)
+        except ValueError:
+            continue
     return None
 
-# Load env
-load_dotenv()
-slack_token = os.environ['SLACK_TOKEN']
-giphy_api_key = os.environ['GIPHY_TOKEN']
-client = WebClient(token=slack_token)
+def format_namelist(namen):
+    return namen[0] if len(namen) == 1 else ', '.join(namen[:-1]) + ' en ' + namen[-1]
 
-# Google Sheets setup via ENV JSON
-scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
-
-creds_json = os.environ.get('GCP_CREDENTIALS')
-if not creds_json:
-    raise RuntimeError("GCP_CREDENTIALS ontbreekt als environment variable.")
-creds_info = json.loads(creds_json)
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-gc = gspread.authorize(creds)
-
-sheet_key = os.environ['SHEET_KEY']
-sheet_url = os.environ['SHEET_URL']
-
-try:
-    sheet = gc.open_by_key(sheet_key).sheet1
-except gspread.SpreadsheetNotFound:
+def verstuur_wens(client, channel, bericht, gif_url=None):
     try:
-        sheet = gc.open_by_url(sheet_url).sheet1
+        if gif_url:
+            client.chat_postMessage(
+                channel=channel,
+                text=bericht,
+                blocks=[
+                    {"type": "section", "text": {"type": "mrkdwn", "text": bericht}},
+                    {"type": "image", "image_url": gif_url, "alt_text": "Verjaardagsgif"},
+                ],
+            )
+        else:
+            raise ValueError("no_gif")
+    except Exception:
+        client.chat_postMessage(channel=channel, text=bericht)
+
+def get_sheet(gc, sheet_key, sheet_url):
+    try:
+        return gc.open_by_key(sheet_key).sheet1
     except gspread.SpreadsheetNotFound:
-        sheet = None
-
-if not sheet:
-    raise RuntimeError("Kon de Google Sheet niet vinden. Controleer SHEET_KEY/SHEET_URL en permissies.")
-
-data = sheet.get_all_records()
-
-# Huidige datum
-vandaag = datetime.now().strftime("%d-%m")
-
-# Filter jarigen
-jarigen = [p for p in data if str(p.get('Verjaardag', '')).strip() == vandaag]
-
-
-if jarigen:
-    # Slack-mentions ophalen
-    mentions = []
-    namen_jarigen = []
-
-    for p in jarigen:
-        email = p.get('E-mail', '').strip()
-        voornaam = p.get('Voornaam', '(onbekend)')
-        namen_jarigen.append(voornaam)
-
         try:
-            resp = client.users_lookupByEmail(email=email)
-            user_id = resp['user']['id']
-            mentions.append(f"<@{user_id}>")
-        except SlackApiError as e:
-            print(f"Kan gebruiker niet vinden voor {email}: {e.response.get('error')}")
-            mentions.append(voornaam)  # fallback zonder Slack-ID
+            return gc.open_by_url(sheet_url).sheet1
+        except gspread.SpreadsheetNotFound:
+            return None
 
-    # Hulpfunctie om namen samen te voegen
-    def format_namelist(namen):
-        if len(namen) == 1:
-            return namen[0]
-        return ', '.join(namen[:-1]) + ' en ' + namen[-1]
+if __name__ == "__main__":
+    load_dotenv()
+    client = WebClient(token=os.environ["SLACK_TOKEN"])
+    giphy_api_key = os.environ["GIPHY_TOKEN"]
+    scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
+    creds_info = json.loads(os.environ.get("GCP_CREDENTIALS") or "{}")
+    if not creds_info:
+        raise RuntimeError("GCP_CREDENTIALS ontbreekt als environment variable.")
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+    gc = gspread.authorize(creds)
 
-    # Verjaardagswensen laden
-    with open('verjaardagswensen.json', 'r', encoding='utf-8') as f:
-        WENSEN = json.load(f)
+    sheet = get_sheet(gc, os.environ["SHEET_KEY"], os.environ["SHEET_URL"])
+    if not sheet:
+        raise RuntimeError("Kon de Google Sheet niet vinden. Controleer SHEET_KEY/SHEET_URL en permissies.")
+    data = sheet.get_all_records()
 
-    # Random wens kiezen
-    wens = random.choice(WENSEN)
-    if len(mentions) == 1:
-        wens_tekst = wens['singular'].replace('{name}', mentions[0])
+    vandaag_tuple = (datetime.now().day, datetime.now().month)
+    jarigen = [p for p in data if parse_dag_maand(p.get('Geboortedatum')) == vandaag_tuple]
+
+    if not jarigen:
+        print("Geen jarigen vandaag.")
     else:
-        wens_tekst = wens['plural'].replace('{names}', format_namelist(mentions))
+        channel = "#avo-random"
+        mentions, namen_jarigen = [], []
+        for p in jarigen:
+            email = p.get('E-mail', '').strip()
+            voornaam = p.get('Voornaam', '(onbekend)')
+            namen_jarigen.append(voornaam)
+            try:
+                resp = client.users_lookupByEmail(email=email)
+                user_id = resp['user']['id']
+                mentions.append(f"<@{user_id}>")
+            except SlackApiError as e:
+                print(f"Kan gebruiker niet vinden voor {email}: {e.response.get('error')}")
+                mentions.append(voornaam)
 
-    # GIF ophalen
-    gif_url = get_random_birthday_gif(giphy_api_key)
+        with open('verjaardagswensen.json', 'r', encoding='utf-8') as f:
+            WENSEN = json.load(f)
 
-    # Bericht opstellen
-    bericht = "🥳🎉 \n" + wens_tekst
-
-    # Bericht versturen
-    if gif_url:
-        client.chat_postMessage(
-            channel='#avo-random',
-            text=bericht,
-            blocks=[
-                {"type": "section", "text": {"type": "mrkdwn", "text": bericht}},
-                {"type": "image", "image_url": gif_url, "alt_text": "Verjaardagsgif"}
-            ]
+        wens = random.choice(WENSEN)
+        wens_tekst = (
+            wens['singular'].replace('{name}', mentions[0])
+            if len(mentions) == 1
+            else wens['plural'].replace('{names}', format_namelist(mentions))
         )
-    else:
-        client.chat_postMessage(channel='#avo-testverjaardagen', text=bericht)
-else:
-    print("Geen jarigen vandaag.")
+
+        gif = get_random_birthday_gif(giphy_api_key)
+        verstuur_wens(client, channel, bericht="🥳🎉 \n" + wens_tekst, gif_url=gif)
+        print(f"Verjaardagswens verstuurd voor: {format_namelist(namen_jarigen)}")
