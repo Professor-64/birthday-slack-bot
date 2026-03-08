@@ -78,8 +78,10 @@ if __name__ == "__main__":
     vandaag_tuple = (datetime.now().day, datetime.now().month)
     jarigen = [p for p in data if parse_dag_maand(p.get('Geboortedatum')) == vandaag_tuple]
 
+    vandaag = datetime.now().strftime("%d/%m/%Y")
+
     if not jarigen:
-        print("Geen jarigen vandaag.")
+        print(f"{vandaag}: Geen jarigen vandaag.")
     else:
         channel = "#avo-random"
         mentions, namen_jarigen = [], []
@@ -107,4 +109,4 @@ if __name__ == "__main__":
 
         gif = get_random_birthday_gif(giphy_api_key)
         verstuur_wens(client, channel, bericht="🥳🎉 \n" + wens_tekst, gif_url=gif)
-        print(f"Verjaardagswens verstuurd voor: {format_namelist(namen_jarigen)}")
+        print(f"{vandaag}: Verjaardagswens verstuurd voor: {format_namelist(namen_jarigen)}")
